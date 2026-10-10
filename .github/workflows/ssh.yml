@@ -1,0 +1,118 @@
+# ========================================================
+# SSH LINUX (UBUNTU) - GITHUB ACTIONS WORKFLOW
+# SIMPAN DI: .github/workflows/ubuntu_ssh.yml
+# ========================================================
+
+name: Siap Digital Agency - Ubuntu SSH Cloud Service
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Password SSH kustom (biarkan kosong untuk SiapAgency#2026!)'
+        required: false
+        default: ''
+      duration_hours:
+        description: 'Durasi SSH aktif (dalam jam, contoh: 1, 2, 6 - maks 6 jam)'
+        required: false
+        default: '6'
+
+jobs:
+  ubuntu-ssh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Configure SSH Server & Create User
+        run: |
+          # 1. Enable Password Authentication for SSH
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo service ssh restart
+
+          # 2. Create User SDG with sudo privileges
+          inputPass="${{ github.event.inputs.custom_password }}"
+          if [ -z "$inputPass" ]; then
+              password="SiapAgency#2026!"
+          else
+              password="$inputPass"
+          fi
+
+          sudo useradd -m -s /bin/bash SDG 2>/dev/null || true
+          echo "SDG:$password" | sudo chpasswd
+          sudo usermod -aG sudo SDG
+
+          echo "SSH_PASS=$password" >> $GITHUB_ENV
+
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          args: --hostname=ubuntu-agency-${{ github.run_id }}
+
+      - name: Display Connection Info & Generate Direct Download Launcher
+        run: |
+          tsIP=$(tailscale ip -4)
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
+
+          # Generate .bat launcher file for 1-click Windows connection to SSH
+          cat << 'EOF' > Siap_Digital_Agency_SSH_AutoLogin.bat
+          @echo off
+          title Siap Digital Agency - Ubuntu SSH Auto Login Launcher
+          color 0A
+          echo ========================================================
+          echo        SIAP DIGITAL AGENCY - AUTOMATED SSH LAUNCHER     
+          echo ========================================================
+          echo.
+          echo Connecting to Ubuntu SSH Server...
+          echo IP Address : __TS_IP__
+          echo Username   : SDG
+          echo Password   : __SSH_PASS__
+          echo ========================================================
+          echo.
+          ssh SDG@__TS_IP__
+          pause
+          EOF
+
+          sed -i "s/__TS_IP__/$tsIP/g" Siap_Digital_Agency_SSH_AutoLogin.bat
+          sed -i "s/__SSH_PASS__/$SSH_PASS/g" Siap_Digital_Agency_SSH_AutoLogin.bat
+
+          # Upload .bat launcher for direct download without artifact storage
+          directUrlBat=$(curl -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency_SSH_AutoLogin.bat" https://litterbox.catbox.moe/resources/internals/api.php)
+
+          echo "========================================================"
+          echo "       SIAP DIGITAL AGENCY - UBUNTU SSH SERVICE         "
+          echo "========================================================"
+          echo " Tailscale IP : $tsIP"
+          echo " Username     : SDG"
+          echo " Password     : $SSH_PASS"
+          echo "--------------------------------------------------------"
+          echo " 🚀 SSH Command:"
+          echo " ssh SDG@$tsIP"
+          echo " --------------------------------------------------------"
+          echo " ⚡ LINK DIRECT DOWNLOAD LAUNCHER SSH (.BAT):"
+          echo " $directUrlBat"
+          echo "========================================================"
+
+      - name: Maintain Connection
+        run: |
+          inputHours="${{ github.event.inputs.duration_hours }}"
+          if [ -z "$inputHours" ]; then
+              hours=6
+          else
+              hours=$inputHours
+          fi
+          totalSeconds=$((hours * 3600))
+          elapsed=0
+
+          echo "=== Ubuntu SSH Maintain Loop Started ($hours Jam) ==="
+
+          while [ $elapsed -lt $totalSeconds ]; do
+              echo "[$(date)] Ubuntu SSH Active ($elapsed / $totalSeconds sec)"
+              sleep 300
+              elapsed=$((elapsed + 300))
+          done
+          echo "Timeout $hours jam tercapai. Runner selesai."
