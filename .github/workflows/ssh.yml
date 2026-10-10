@@ -44,16 +44,11 @@ jobs:
           sudo usermod -aG sudo SDG || true
           echo "SSH_PASS=$password" >> $GITHUB_ENV
 
-      - name: Connect Tailscale
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          args: --hostname=ubuntu-agency-${{ github.run_id }}
-
-      - name: Display Connection Info & Generate Direct Download Launcher
+      - name: Get Server IP Address & Generate Direct Download Launcher
         run: |
-          tsIP=$(tailscale ip -4 || hostname -I | awk '{print $1}')
-          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
+          # Mengambil IP Publik Server, jika gagal pakai IP Lokal
+          myIP=$(curl -s https://ifconfig.me || curl -s https://ipify.org || hostname -I | awk '{print $1}')
+          echo "SERVER_IP=$myIP" >> $GITHUB_ENV
 
           cat << 'EOF' > Siap_Digital_Agency_SSH_AutoLogin.bat
           @echo off
@@ -64,16 +59,16 @@ jobs:
           echo ========================================================
           echo.
           echo Connecting to Ubuntu SSH Server...
-          echo IP Address : __TS_IP__
+          echo IP Address : __SERVER_IP__
           echo Username   : SDG
           echo Password   : __SSH_PASS__
           echo ========================================================
           echo.
-          ssh SDG@__TS_IP__
+          ssh SDG@__SERVER_IP__
           pause
           EOF
 
-          sed -i "s/__TS_IP__/$tsIP/g" Siap_Digital_Agency_SSH_AutoLogin.bat
+          sed -i "s/__SERVER_IP__/$myIP/g" Siap_Digital_Agency_SSH_AutoLogin.bat
           sed -i "s/__SSH_PASS__/$SSH_PASS/g" Siap_Digital_Agency_SSH_AutoLogin.bat
 
           directUrlBat=$(curl -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency_SSH_AutoLogin.bat" https://catbox.moe)
@@ -81,12 +76,12 @@ jobs:
           echo "========================================================"
           echo "       SIAP DIGITAL AGENCY - UBUNTU SSH SERVICE        "
           echo "========================================================"
-          echo " Tailscale IP   : $tsIP"
+          echo " Server IP      : $myIP"
           echo " Username       : SDG"
           echo " Password       : $SSH_PASS"
           echo "--------------------------------------------------------"
           echo " 🚀 SSH Command:"
-          echo " ssh SDG@$tsIP"
+          echo " ssh SDG@$myIP"
           echo " --------------------------------------------------------"
           echo " ⚡ LINK DIRECT DOWNLOAD LAUNCHER SSH (.BAT):"
           echo " $directUrlBat"
