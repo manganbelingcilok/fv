@@ -26,7 +26,6 @@ jobs:
     steps:
       - name: Configure SSH Server & Create User
         run: |
-          # Mengaktifkan Password Authentication jika belum aktif
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
           sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config || true
           sudo service ssh restart || sudo systemctl restart ssh || true
@@ -38,18 +37,31 @@ jobs:
             password="$inputPass"
           fi
           
-          # Membuat atau memperbarui password user SDG
           sudo useradd -m -s /bin/bash SDG 2>/dev/null || true
           echo "SDG:$password" | sudo chpasswd
           sudo usermod -aG sudo SDG || true
           echo "SSH_PASS=$password" >> $GITHUB_ENV
 
-      - name: Get Server IP Address & Generate Direct Download Launcher
+      - name: Install and Connect Tailscale (User Mode)
         run: |
-          # Mengambil IP Publik Server, jika gagal pakai IP Lokal
-          myIP=$(curl -s https://ifconfig.me || curl -s https://ipify.org || hostname -I | awk '{print $1}')
-          echo "SERVER_IP=$myIP" >> $GITHUB_ENV
+          # Mengunduh Tailscale biner resmi
+          curl -sLO https://tailscale.com
+          tar -xzf tailscale_1.42.0_amd64.tgz
+          cd tailscale_1.42.0_amd64
+          
+          # Menjalankan Tailscale daemon di folder lokal (tidak butuh akses root sistem)
+          ./tailscaled --tun=userspace-networking --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 &
+          sleep 5
+          
+          # Menghubungkan ke akun Tailscale Anda
+          ./tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ubuntu-agency-${{ github.run_id }} --accept-dns=false
+          
+          # Mengambil IP Tailscale yang didapatkan
+          tsIP=$(./tailscale ip -4)
+          echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
 
+      - name: Display Connection Info & Generate Direct Download Launcher
+        run: |
           cat << 'EOF' > Siap_Digital_Agency_SSH_AutoLogin.bat
           @echo off
           title Siap Digital Agency - Ubuntu SSH Auto Login Launcher
@@ -59,16 +71,16 @@ jobs:
           echo ========================================================
           echo.
           echo Connecting to Ubuntu SSH Server...
-          echo IP Address : __SERVER_IP__
+          echo IP Address : __TS_IP__
           echo Username   : SDG
           echo Password   : __SSH_PASS__
           echo ========================================================
           echo.
-          ssh SDG@__SERVER_IP__
+          ssh SDG@__TS_IP__
           pause
           EOF
 
-          sed -i "s/__SERVER_IP__/$myIP/g" Siap_Digital_Agency_SSH_AutoLogin.bat
+          sed -i "s/__TS_IP__/$TAILSCALE_IP/g" Siap_Digital_Agency_SSH_AutoLogin.bat
           sed -i "s/__SSH_PASS__/$SSH_PASS/g" Siap_Digital_Agency_SSH_AutoLogin.bat
 
           directUrlBat=$(curl -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency_SSH_AutoLogin.bat" https://catbox.moe)
@@ -76,12 +88,12 @@ jobs:
           echo "========================================================"
           echo "       SIAP DIGITAL AGENCY - UBUNTU SSH SERVICE        "
           echo "========================================================"
-          echo " Server IP      : $myIP"
+          echo " Tailscale IP   : $TAILSCALE_IP"
           echo " Username       : SDG"
           echo " Password       : $SSH_PASS"
           echo "--------------------------------------------------------"
           echo " 🚀 SSH Command:"
-          echo " ssh SDG@$myIP"
+          echo " ssh SDG@$TAILSCALE_IP"
           echo " --------------------------------------------------------"
           echo " ⚡ LINK DIRECT DOWNLOAD LAUNCHER SSH (.BAT):"
           echo " $directUrlBat"
