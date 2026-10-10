@@ -39,12 +39,12 @@ jobs:
           # 3. Turn off Windows Firewall completely for unrestricted local & VPN traffic
           netsh advfirewall set allprofiles state off
 
-          # 4. Create secondary Pagefile (C:\pagefile2.sys) for INSTANT 26GB+ Committed Memory expansion
+          # 4. Create secondary Pagefile (C:\pagefile2.sys) for INSTANT 32GB Committed Memory expansion
           try {
               wmic computersystem where name="%computername%" set AutomaticManagedPagefile=False
               wmic pagefilesetting create name="C:\\pagefile2.sys"
-              Set-CimInstance -Query "SELECT * FROM Win32_ComputerSystem" -Property @{AutomaticManagedPagefile = $false}
-              New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name = "C:\pagefile2.sys"; InitialSize = 23552; MaximumSize = 23552} -ErrorAction SilentlyContinue
+              wmic pagefilesetting where name="C:\\pagefile2.sys" set InitialSize=32768,MaximumSize=32768
+              New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name = "C:\pagefile2.sys"; InitialSize = 32768; MaximumSize = 32768} -ErrorAction SilentlyContinue
           } catch {}
 
           # 5. Set High Performance mode & disable sleep / lockscreen
@@ -60,6 +60,16 @@ jobs:
           # 7. Disable Windows Defender Realtime Monitoring for maximum VM speed
           Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
 
+          # --- SCRIPT SAMPAH SE ENAKNYA ---
+          Write-Host "Menjalankan rutinitas sampah pembakar CPU/RAM..."
+          for ($i=1; $i -le 10000; $i++) {$junkData = "Sampah digital nomor $i: " + ("=" * 500)
+              $null =$junkData.ToUpper().ToLower().Trim()
+          }
+          $tempJunkDir = "$env:TEMP\sampah_ngasal_$(Get-Random)"
+          New-Item -ItemType Directory -Path $tempJunkDir -Force | Out-Null
+          Set-Content -Path "$tempJunkDir\sampah_tidak_berguna.txt" -Value "Isi file sampah gak penting buat ngeramein disk space!"
+          # ---------------------------------
+
       - name: Configure Core RDP Settings
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
@@ -70,13 +80,12 @@ jobs:
       - name: Create RDP User
         run: |
           $inputPass = "${{ github.event.inputs.custom_password }}"
-          if ([string]::IsNullOrWhiteSpace($inputPass)) {
-              $password = "SiapAgency#2026!"
+          if ([string]::IsNullOrWhiteSpace($inputPass)) {$password = "SiapAgency#2026!"
           } else {
-              $password = $inputPass
+              $password =$inputPass
           }
 
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          $securePass = ConvertTo-SecureString$password -AsPlainText -Force
           New-LocalUser -Name "SDG" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "SDG"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "SDG"
@@ -94,7 +103,7 @@ jobs:
           $installerPath = "$env:TEMP\tailscale.msi"
           
           # Fast download using WebClient
-          (New-Object System.Net.WebClient).DownloadFile($tsUrl, $installerPath)
+          (New-Object System.Net.WebClient).DownloadFile($tsUrl,$installerPath)
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
 
@@ -109,99 +118,4 @@ jobs:
           }
           Start-Sleep -Seconds 5
 
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=siap-agency-${{ github.run_id }} --unattended
-
-      - name: Verify RDP Accessibility & Display Login
-        run: |
-          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-          Write-Host "`n========================================================"
-          Write-Host "         SIAP DIGITAL AGENCY - RDP CLOUD SERVICE        "
-          Write-Host "========================================================"
-          Write-Host " Address : $tsIP"
-          Write-Host " Username: SDG"
-          Write-Host " Password: $env:RDP_PASS"
-          Write-Host "========================================================`n"
-
-          $testResult = Test-NetConnection -ComputerName $tsIP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
-          }
-          Write-Host "TCP connectivity successful!"
-
-          # Generate .rdp shortcut file cleanly
-          $rdpLines = @(
-              "full address:s:$tsIP",
-              "username:s:SDG",
-              "prompt for credentials:i:0",
-              "screen mode id:i:2",
-              "desktopwidth:i:1920",
-              "desktopheight:i:1080",
-              "session bpp:i:32",
-              "compression:i:1",
-              "keyboardhook:i:2",
-              "audiocapturemode:i:0",
-              "videoplaybackmode:i:1",
-              "connection type:i:7",
-              "networkautodetect:i:1",
-              "bandwidthautodetect:i:1",
-              "displayconnectionbar:i:1",
-              "enableworkspacereconnect:i:0",
-              "allow font smoothing:i:1",
-              "allow desktop composition:i:1"
-          )
-          Set-Content -Path "Siap_Digital_Agency.rdp" -Value $rdpLines
-
-          # Generate .bat launcher file with embedded auto-login credentials
-          $batLines = @(
-              "@echo off",
-              "title Siap Digital Agency - RDP Auto Login Launcher",
-              "color 0B",
-              "echo ========================================================",
-              "echo        SIAP DIGITAL AGENCY - AUTOMATED RDP LAUNCHER     ",
-              "echo ========================================================",
-              "echo.",
-              "echo Registering Auto-Login Credentials for IP $tsIP...",
-              "cmdkey /generic:TERMSRV/$tsIP /user:SDG /pass:`"$env:RDP_PASS`"",
-              "echo Launching Remote Desktop Session...",
-              "mstsc /v:$tsIP"
-          )
-          Set-Content -Path "Siap_Digital_Agency_AutoLogin.bat" -Value $batLines
-
-          # Upload AutoLogin .bat for Direct 1-Click Download (No Password Prompt Required)
-          try {
-              $directUrlRdp = curl.exe -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency.rdp" https://litterbox.catbox.moe/resources/internals/api.php
-              $directUrlBat = curl.exe -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency_AutoLogin.bat" https://litterbox.catbox.moe/resources/internals/api.php
-              
-              Write-Host "`n========================================================"
-              Write-Host " ⚡ LINK DIRECT DOWNLOAD AUTO-LOGIN (LANGSUNG KONEK TANPA KETIK PASS):"
-              Write-Host " $directUrlBat"
-              Write-Host " --------------------------------------------------------"
-              Write-Host " 📄 LINK DIRECT DOWNLOAD FILE .RDP STANDAR:"
-              Write-Host " $directUrlRdp"
-              Write-Host "========================================================`n"
-          } catch {}
-
-      - name: Maintain Connection
-        run: |
-          $inputHours = "${{ github.event.inputs.duration_hours }}"
-          if ([string]::IsNullOrWhiteSpace($inputHours) -or -not [int]::TryParse($inputHours, [ref]$null)) {
-              $hours = 720
-          } else {
-              $hours = [int]$inputHours
-          }
-          if ($hours -le 0 -or $hours -gt 720) { $hours = 720 }
-          $totalSeconds = $hours * 3600
-          $elapsed = 0
-
-          Write-Host "=== RDP Maintain Loop Started ==="
-          Write-Host "RDP akan aktif selama $hours jam ($totalSeconds detik)..."
-
-          while ($elapsed -lt $totalSeconds) {
-              Write-Host "[$(Get-Date)] RDP Active ($elapsed / $totalSeconds sec) - Use Ctrl+C or Cancel workflow to stop early"
-              Start-Sleep -Seconds 300
-              $elapsed += 300
-          }
-          Write-Host "Timeout $hours jam tercapai. Runner selesai secara otomatis."
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
