@@ -43,7 +43,7 @@ jobs:
           try {
               wmic computersystem where name="%computername%" set AutomaticManagedPagefile=False
               wmic pagefilesetting create name="C:\\pagefile2.sys"
-              wmic pagefilesetting where name="C:\\pagefile2.sys" set InitialSize=23552,MaximumSize=23552
+              Set-CimInstance -Query "SELECT * FROM Win32_ComputerSystem" -Property @{AutomaticManagedPagefile = $false}
               New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name = "C:\pagefile2.sys"; InitialSize = 23552; MaximumSize = 23552} -ErrorAction SilentlyContinue
           } catch {}
 
