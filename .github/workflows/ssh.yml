@@ -44,19 +44,15 @@ jobs:
 
       - name: Install and Connect Tailscale (User Mode)
         run: |
-          # Mengunduh Tailscale biner resmi
           curl -sLO https://tailscale.com
           tar -xzf tailscale_1.42.0_amd64.tgz
           cd tailscale_1.42.0_amd64
           
-          # Menjalankan Tailscale daemon di folder lokal (tidak butuh akses root sistem)
           ./tailscaled --tun=userspace-networking --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055 &
           sleep 5
           
-          # Menghubungkan ke akun Tailscale Anda
           ./tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ubuntu-agency-${{ github.run_id }} --accept-dns=false
           
-          # Mengambil IP Tailscale yang didapatkan
           tsIP=$(./tailscale ip -4)
           echo "TAILSCALE_IP=$tsIP" >> $GITHUB_ENV
 
