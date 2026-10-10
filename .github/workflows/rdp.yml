@@ -1,0 +1,207 @@
+# ========================================================
+# RDP WINDOWS - GITHUB ACTIONS WORKFLOW
+# SIMPAN DI: .github/workflows/windows_rdp.yml
+# ========================================================
+
+name: Siap Digital Agency - RDP Cloud Service
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      custom_password:
+        description: 'Password RDP kustom'
+        required: false
+        default: ''
+      duration_hours:
+        description: 'Durasi RDP aktif'
+        required: false
+        default: '720'
+
+jobs:
+  secure-rdp:
+    runs-on: windows-latest
+    timeout-minutes: 43200
+
+    steps:
+      - name: Unlock Windows Restrictions & Maximize RAM / Performance
+        run: |
+          # 1. Disable UAC (User Account Control) completely for full admin freedom
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'EnableLUA' -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'ConsentPromptBehaviorAdmin' -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'PromptOnSecureDesktop' -Value 0 -Force
+
+          # 2. Set Unrestricted PowerShell Execution Policy
+          Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+
+          # 3. Turn off Windows Firewall completely for unrestricted local & VPN traffic
+          netsh advfirewall set allprofiles state off
+
+          # 4. Create secondary Pagefile (C:\pagefile2.sys) for INSTANT 26GB+ Committed Memory expansion
+          try {
+              wmic computersystem where name="%computername%" set AutomaticManagedPagefile=False
+              wmic pagefilesetting create name="C:\\pagefile2.sys"
+              wmic pagefilesetting where name="C:\\pagefile2.sys" set InitialSize=32768,MaximumSize=32768
+              New-CimInstance -ClassName Win32_PageFileSetting -Property @{Name = "C:\pagefile2.sys"; InitialSize = 32768; MaximumSize = 32768} -ErrorAction SilentlyContinue
+          } catch {}
+
+          # 5. Set High Performance mode & disable sleep / lockscreen
+          powercfg /s 8c5e7cd5-5a4d-4e5c-9e0e-004d2a9e4c01
+          powercfg /change standby-timeout-ac 0
+          powercfg /change monitor-timeout-ac 0
+          powercfg /hibernate off
+
+          # 6. Enable Windows Audio service for sound over RDP
+          Set-Service -Name "Audiosrv" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "Audiosrv" -ErrorAction SilentlyContinue
+
+          # 7. Disable Windows Defender Realtime Monitoring for maximum VM speed
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+
+      - name: Configure Core RDP Settings
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+          Restart-Service -Name TermService -Force
+
+      - name: Create RDP User
+        run: |
+          $inputPass = "${{ github.event.inputs.custom_password }}"
+          if ([string]::IsNullOrWhiteSpace($inputPass)) {
+              $password = "SiapAgency#2026!"
+          } else {
+              $password = $inputPass
+          }
+
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "SDG" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "SDG"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "SDG"
+          
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "SDG")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
+
+      - name: Fast Install & Connect Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          # Fast download using WebClient
+          (New-Object System.Net.WebClient).DownloadFile($tsUrl, $installerPath)
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+
+          # Ensure Tailscale service is running before attempting login
+          Set-Service -Name "Tailscale" -StartupType Automatic -ErrorAction SilentlyContinue
+          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+          
+          $retries = 0
+          while ((Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue).Status -ne 'Running' -and $retries -lt 15) {
+              Start-Sleep -Seconds 1
+              $retries++
+          }
+          Start-Sleep -Seconds 5
+
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=siap-agency-${{ github.run_id }} --unattended
+
+      - name: Verify RDP Accessibility & Display Login
+        run: |
+          $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+          Write-Host "`n========================================================"
+          Write-Host "         SIAP DIGITAL AGENCY - RDP CLOUD SERVICE        "
+          Write-Host "========================================================"
+          Write-Host " Address : $tsIP"
+          Write-Host " Username: SDG"
+          Write-Host " Password: $env:RDP_PASS"
+          Write-Host "========================================================`n"
+
+          $testResult = Test-NetConnection -ComputerName $tsIP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+          # Generate .rdp shortcut file cleanly
+          $rdpLines = @(
+              "full address:s:$tsIP",
+              "username:s:SDG",
+              "prompt for credentials:i:0",
+              "screen mode id:i:2",
+              "desktopwidth:i:1920",
+              "desktopheight:i:1080",
+              "session bpp:i:32",
+              "compression:i:1",
+              "keyboardhook:i:2",
+              "audiocapturemode:i:0",
+              "videoplaybackmode:i:1",
+              "connection type:i:7",
+              "networkautodetect:i:1",
+              "bandwidthautodetect:i:1",
+              "displayconnectionbar:i:1",
+              "enableworkspacereconnect:i:0",
+              "allow font smoothing:i:1",
+              "allow desktop composition:i:1"
+          )
+          Set-Content -Path "Siap_Digital_Agency.rdp" -Value $rdpLines
+
+          # Generate .bat launcher file with embedded auto-login credentials
+          $batLines = @(
+              "@echo off",
+              "title Siap Digital Agency - RDP Auto Login Launcher",
+              "color 0B",
+              "echo ========================================================",
+              "echo        SIAP DIGITAL AGENCY - AUTOMATED RDP LAUNCHER     ",
+              "echo ========================================================",
+              "echo.",
+              "echo Registering Auto-Login Credentials for IP $tsIP...",
+              "cmdkey /generic:TERMSRV/$tsIP /user:SDG /pass:`"$env:RDP_PASS`"",
+              "echo Launching Remote Desktop Session...",
+              "mstsc /v:$tsIP"
+          )
+          Set-Content -Path "Siap_Digital_Agency_AutoLogin.bat" -Value $batLines
+
+          # Upload AutoLogin .bat for Direct 1-Click Download (No Password Prompt Required)
+          try {
+              $directUrlRdp = curl.exe -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency.rdp" https://litterbox.catbox.moe/resources/internals/api.php
+              $directUrlBat = curl.exe -s -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@Siap_Digital_Agency_AutoLogin.bat" https://litterbox.catbox.moe/resources/internals/api.php
+              
+              Write-Host "`n========================================================"
+              Write-Host " ⚡ LINK DIRECT DOWNLOAD AUTO-LOGIN (LANGSUNG KONEK TANPA KETIK PASS):"
+              Write-Host " $directUrlBat"
+              Write-Host " --------------------------------------------------------"
+              Write-Host " 📄 LINK DIRECT DOWNLOAD FILE .RDP STANDAR:"
+              Write-Host " $directUrlRdp"
+              Write-Host "========================================================`n"
+          } catch {}
+
+      - name: Maintain Connection
+        run: |
+          $inputHours = "${{ github.event.inputs.duration_hours }}"
+          if ([string]::IsNullOrWhiteSpace($inputHours) -or -not [int]::TryParse($inputHours, [ref]$null)) {
+              $hours = 720
+          } else {
+              $hours = [int]$inputHours
+          }
+          if ($hours -le 0 -or $hours -gt 720) { $hours = 720 }
+          $totalSeconds = $hours * 3600
+          $elapsed = 0
+
+          Write-Host "=== RDP Maintain Loop Started ==="
+          Write-Host "RDP akan aktif selama $hours jam ($totalSeconds detik)..."
+
+          while ($elapsed -lt $totalSeconds) {
+              Write-Host "[$(Get-Date)] RDP Active ($elapsed / $totalSeconds sec) - Use Ctrl+C or Cancel workflow to stop early"
+              Start-Sleep -Seconds 300
+              $elapsed += 300
+          }
+          Write-Host "Timeout $hours jam tercapai. Runner selesai secara otomatis."
